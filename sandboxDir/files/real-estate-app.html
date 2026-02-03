@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAFzwS60FzQMJkPBST0jsE47y8ps2b4iYs" async defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3129,7 +3130,241 @@
             }
         }
 
+        // Traffic multipliers for typical Tuesday - Going TO destination (morning commute pattern)
+        const tuesdayTrafficToDestination = {
+            0: 0.7,   // 12 AM - very light
+            1: 0.65,  // 1 AM
+            2: 0.6,   // 2 AM
+            3: 0.6,   // 3 AM
+            4: 0.65,  // 4 AM
+            5: 0.75,  // 5 AM - early commuters
+            6: 0.9,   // 6 AM - building up
+            7: 1.3,   // 7 AM - morning rush starts
+            8: 1.5,   // 8 AM - peak morning rush
+            9: 1.35,  // 9 AM - still busy
+            10: 1.0,  // 10 AM - settling down
+            11: 0.95, // 11 AM
+            12: 1.05, // 12 PM - lunch traffic
+            13: 1.0,  // 1 PM
+            14: 0.95, // 2 PM
+            15: 1.1,  // 3 PM - school pickup
+            16: 1.3,  // 4 PM - evening rush starts
+            17: 1.55, // 5 PM - peak evening rush
+            18: 1.45, // 6 PM - still heavy
+            19: 1.2,  // 7 PM - easing
+            20: 1.0,  // 8 PM
+            21: 0.85, // 9 PM
+            22: 0.75, // 10 PM
+            23: 0.7   // 11 PM
+        };
+
+        // Traffic multipliers for typical Tuesday - Coming FROM destination (evening commute pattern)
+        // Reverse pattern: lighter in morning (reverse commute), heavier in evening (going home)
+        const tuesdayTrafficFromDestination = {
+            0: 0.7,   // 12 AM - very light
+            1: 0.65,  // 1 AM
+            2: 0.6,   // 2 AM
+            3: 0.6,   // 3 AM
+            4: 0.65,  // 4 AM
+            5: 0.7,   // 5 AM - light reverse commute
+            6: 0.8,   // 6 AM - still light going back
+            7: 0.9,   // 7 AM - reverse commuters have easier time
+            8: 1.0,   // 8 AM - moderate
+            9: 0.95,  // 9 AM - settling
+            10: 0.9,  // 10 AM
+            11: 0.95, // 11 AM
+            12: 1.05, // 12 PM - lunch traffic
+            13: 1.0,  // 1 PM
+            14: 1.0,  // 2 PM
+            15: 1.15, // 3 PM - early leavers
+            16: 1.4,  // 4 PM - heading home starts
+            17: 1.6,  // 5 PM - peak going home
+            18: 1.55, // 6 PM - still heavy going home
+            19: 1.35, // 7 PM - easing
+            20: 1.1,  // 8 PM
+            21: 0.9,  // 9 PM
+            22: 0.8,  // 10 PM
+            23: 0.7   // 11 PM
+        };
+
+        var trafficChartTo = null;
+        var trafficChartFrom = null;
+
+        function createTrafficChart(canvasId, baseTimeMinutes, multipliers, borderColor, bgColor, existingChart) {
+            const hours = [];
+            const times = [];
+            const colors = [];
+
+            for (let h = 5; h <= 22; h++) { // 5 AM to 10 PM
+                hours.push(h < 12 ? h + ' AM' : (h === 12 ? '12 PM' : (h - 12) + ' PM'));
+                const adjustedTime = Math.round(baseTimeMinutes * multipliers[h]);
+                times.push(adjustedTime);
+
+                // Color based on traffic intensity
+                if (multipliers[h] >= 1.4) {
+                    colors.push('rgba(220, 38, 38, 0.8)'); // Red for heavy
+                } else if (multipliers[h] >= 1.15) {
+                    colors.push('rgba(245, 158, 11, 0.8)'); // Orange for moderate
+                } else {
+                    colors.push('rgba(34, 197, 94, 0.8)'); // Green for light
+                }
+            }
+
+            const ctx = document.getElementById(canvasId);
+            if (!ctx) return null;
+
+            // Destroy existing chart if any
+            if (existingChart) {
+                existingChart.destroy();
+            }
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: hours,
+                    datasets: [{
+                        label: 'Commute Time (minutes)',
+                        data: times,
+                        borderColor: borderColor,
+                        backgroundColor: bgColor,
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: colors,
+                        pointBorderColor: colors,
+                        pointRadius: 4,
+                        pointHoverRadius: 7
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleFont: { size: 13 },
+                            bodyFont: { size: 12 },
+                            padding: 10,
+                            callbacks: {
+                                label: function(context) {
+                                    const mins = context.raw;
+                                    const hours = Math.floor(mins / 60);
+                                    const remainingMins = mins % 60;
+                                    if (hours > 0) {
+                                        return `${hours}h ${remainingMins}m drive`;
+                                    }
+                                    return `${mins} min drive`;
+                                },
+                                afterLabel: function(context) {
+                                    const multiplier = multipliers[context.dataIndex + 5];
+                                    if (multiplier >= 1.4) return '🔴 Heavy traffic';
+                                    if (multiplier >= 1.15) return '🟡 Moderate traffic';
+                                    return '🟢 Light traffic';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: 'Minutes',
+                                font: { size: 11, weight: 'bold' }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time of Day (Tuesday)',
+                                font: { size: 11, weight: 'bold' }
+                            },
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45,
+                                font: { size: 10 }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderTrafficCharts(baseTimeMinutes, destinationName, sourceName) {
+            // Render "To Destination" chart
+            trafficChartTo = createTrafficChart(
+                'trafficChartTo',
+                baseTimeMinutes,
+                tuesdayTrafficToDestination,
+                '#E76F51',
+                'rgba(231, 111, 81, 0.1)',
+                trafficChartTo
+            );
+
+            // Render "From Destination" chart
+            trafficChartFrom = createTrafficChart(
+                'trafficChartFrom',
+                baseTimeMinutes,
+                tuesdayTrafficFromDestination,
+                '#2A9D8F',
+                'rgba(42, 157, 143, 0.1)',
+                trafficChartFrom
+            );
+        }
+
+        var currentAnalysisSource = '';
+
+        function showTrafficAnalysis(destId) {
+            const dest = savedDestinations.find(d => d.id === destId);
+            if (!dest) return;
+
+            // Get the current time element to extract base time
+            const timeElement = document.getElementById('dest-time-' + destId);
+            let baseTimeMinutes = 30; // Default 30 min if not calculated
+
+            if (timeElement && timeElement.textContent) {
+                const timeText = timeElement.textContent;
+                // Parse time like "25 mins" or "1 hour 15 mins"
+                const hourMatch = timeText.match(/(\d+)\s*hour/);
+                const minMatch = timeText.match(/(\d+)\s*min/);
+
+                let parsedTime = 0;
+                if (hourMatch) parsedTime += parseInt(hourMatch[1]) * 60;
+                if (minMatch) parsedTime += parseInt(minMatch[1]);
+
+                // Only use parsed time if we found valid numbers
+                if (parsedTime > 0) {
+                    baseTimeMinutes = parsedTime;
+                }
+
+                console.log('Parsed commute time:', timeText, '→', baseTimeMinutes, 'minutes');
+            }
+
+            // Show chart section
+            const chartSection = document.getElementById('trafficAnalysisSection');
+            if (chartSection) {
+                chartSection.style.display = 'block';
+                document.getElementById('trafficDestName').textContent = dest.name;
+                document.getElementById('trafficSourceName').textContent = currentAnalysisSource || 'Your Address';
+                document.getElementById('trafficDestNameReturn').textContent = dest.name;
+                document.getElementById('trafficSourceNameReturn').textContent = currentAnalysisSource || 'Your Address';
+                renderTrafficCharts(baseTimeMinutes, dest.name, currentAnalysisSource);
+            }
+        }
+
         function generateCommuteResults(address) {
+            // Store the source address for traffic analysis display
+            currentAnalysisSource = address;
+
             // Calculate times after rendering
             setTimeout(() => calculateCommuteTimes(address), 100);
 
@@ -3141,6 +3376,7 @@
                             <div class="destination-address">${dest.address}</div>
                         </div>
                         <div class="destination-time" id="dest-time-${dest.id}">Calculating...</div>
+                        <button class="btn-chart" onclick="showTrafficAnalysis(${dest.id})" title="View Traffic Analysis" style="background: var(--secondary); color: white; border: none; padding: 0.4rem 0.6rem; border-radius: 6px; cursor: pointer; font-size: 0.75rem; margin-right: 0.5rem;">📊</button>
                         <button class="destination-delete" onclick="removeDestination(${dest.id})" title="Remove">×</button>
                     </div>
                 `).join('')
@@ -3157,6 +3393,53 @@
                         ${destinationsHTML}
                     </div>
 
+                    <!-- Traffic Analysis Chart Section -->
+                    <div id="trafficAnalysisSection" style="display: none; margin-top: 1.5rem; background: var(--bg-white); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h4 style="color: var(--text-primary); margin: 0;">📊 Traffic Analysis</h4>
+                            <button onclick="document.getElementById('trafficAnalysisSection').style.display='none'" style="background: none; border: none; font-size: 1.25rem; cursor: pointer; color: var(--text-muted);">×</button>
+                        </div>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 1.25rem;">Estimated commute times throughout a typical <strong>Tuesday</strong></p>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                            <!-- To Destination Chart -->
+                            <div style="background: var(--bg-light); padding: 1rem; border-radius: var(--radius-md);">
+                                <h5 style="color: var(--primary); margin-bottom: 0.5rem; font-size: 0.9rem;">
+                                    🚗 Going TO <span id="trafficDestName"></span>
+                                </h5>
+                                <p style="font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+                                    From: <span id="trafficSourceName"></span>
+                                </p>
+                                <div style="height: 220px; position: relative;">
+                                    <canvas id="trafficChartTo"></canvas>
+                                </div>
+                            </div>
+
+                            <!-- From Destination Chart -->
+                            <div style="background: var(--bg-light); padding: 1rem; border-radius: var(--radius-md);">
+                                <h5 style="color: var(--secondary); margin-bottom: 0.5rem; font-size: 0.9rem;">
+                                    🏠 Returning FROM <span id="trafficDestNameReturn"></span>
+                                </h5>
+                                <p style="font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+                                    To: <span id="trafficSourceNameReturn"></span>
+                                </p>
+                                <div style="height: 220px; position: relative;">
+                                    <canvas id="trafficChartFrom"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; gap: 1rem; justify-content: center; margin-top: 1.25rem; font-size: 0.75rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+                            <span><span style="color: #22c55e;">●</span> Light traffic</span>
+                            <span><span style="color: #f59e0b;">●</span> Moderate traffic</span>
+                            <span><span style="color: #dc2626;">●</span> Heavy traffic</span>
+                        </div>
+
+                        <div style="background: rgba(231, 111, 81, 0.1); padding: 0.75rem 1rem; border-radius: var(--radius-sm); margin-top: 1rem; font-size: 0.75rem; color: var(--text-secondary);">
+                            <strong>💡 Insight:</strong> Morning rush (7-9 AM) is typically heavier going TO work. Evening rush (5-7 PM) is heavier returning home.
+                        </div>
+                    </div>
+
                     <div style="background: var(--bg-light); padding: 1.25rem; border-radius: var(--radius-md); margin-top: 1rem;">
                         <h4 style="font-size: 0.875rem; color: var(--text-primary); margin-bottom: 1rem;">➕ Add New Destination</h4>
                         <div class="add-destination-form" style="flex-direction: column;">
@@ -3170,9 +3453,9 @@
                 <div style="background: rgba(42, 157, 143, 0.1); padding: 1rem; border-radius: var(--radius-md); border-left: 4px solid var(--secondary); margin-top: 1.5rem;">
                     <h4 style="color: var(--secondary); margin-bottom: 0.5rem;">💡 Tips</h4>
                     <ul style="margin-left: 1.25rem; color: var(--text-secondary); font-size: 0.875rem;">
-                        <li>Add your workplace, grocery stores, gym, etc.</li>
-                        <li>Driving times are calculated via Google Maps</li>
-                        <li>Enter complete addresses for best results</li>
+                        <li>Click 📊 to see traffic patterns throughout the day</li>
+                        <li>Times are based on typical Tuesday traffic</li>
+                        <li>Peak hours: 7-9 AM and 5-7 PM</li>
                     </ul>
                 </div>
             `;
